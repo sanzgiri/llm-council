@@ -42,6 +42,16 @@ OPENROUTER_API_KEY=sk-or-v1-...
 
 Get your API key at [openrouter.ai](https://openrouter.ai/). Make sure to purchase the credits you need, or sign up for automatic top up.
 
+### 2a. Configure Supabase Storage (Optional)
+
+To persist conversations in Postgres (recommended for deployments), set `DATABASE_URL`:
+
+```bash
+DATABASE_URL=postgres://USER:PASSWORD@HOST:5432/postgres?sslmode=require
+```
+
+You can copy the connection string from Supabase under **Project Settings → Database**. If it does not include SSL, append `?sslmode=require`.
+
 ### 3. Configure Models (Optional)
 
 Edit `backend/config.py` to customize the council:
