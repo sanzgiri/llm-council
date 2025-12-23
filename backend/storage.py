@@ -7,6 +7,34 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 from .config import DATA_DIR
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+
+def using_database() -> bool:
+    """Return True when DATABASE_URL is configured."""
+    return bool(DATABASE_URL)
+
+
+def get_db_connection():
+    """Create a database connection."""
+    import psycopg
+    return psycopg.connect(DATABASE_URL, autocommit=True)
+
+
+def ensure_db():
+    """Ensure the conversations table exists."""
+    with get_db_connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                title TEXT NOT NULL,
+                messages JSONB NOT NULL DEFAULT '[]'::jsonb
+            )
+            """
+        )
+
 
 def ensure_data_dir():
     """Ensure the data directory exists."""
@@ -28,8 +56,6 @@ def create_conversation(conversation_id: str) -> Dict[str, Any]:
     Returns:
         New conversation dict
     """
-    ensure_data_dir()
-
     conversation = {
         "id": conversation_id,
         "created_at": datetime.utcnow().isoformat(),
@@ -37,10 +63,27 @@ def create_conversation(conversation_id: str) -> Dict[str, Any]:
         "messages": []
     }
 
-    # Save to file
-    path = get_conversation_path(conversation_id)
-    with open(path, 'w') as f:
-        json.dump(conversation, f, indent=2)
+    if using_database():
+        ensure_db()
+        from psycopg.types.json import Json
+        with get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO conversations (id, created_at, title, messages)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (
+                    conversation["id"],
+                    conversation["created_at"],
+                    conversation["title"],
+                    Json(conversation["messages"]),
+                ),
+            )
+    else:
+        ensure_data_dir()
+        path = get_conversation_path(conversation_id)
+        with open(path, 'w') as f:
+            json.dump(conversation, f, indent=2)
 
     return conversation
 
@@ -55,13 +98,32 @@ def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
     Returns:
         Conversation dict or None if not found
     """
-    path = get_conversation_path(conversation_id)
-
-    if not os.path.exists(path):
-        return None
-
-    with open(path, 'r') as f:
-        return json.load(f)
+    if using_database():
+        ensure_db()
+        with get_db_connection() as conn:
+            cur = conn.execute(
+                """
+                SELECT id, created_at, title, messages
+                FROM conversations
+                WHERE id = %s
+                """,
+                (conversation_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row[0],
+            "created_at": row[1],
+            "title": row[2],
+            "messages": row[3],
+        }
+    else:
+        path = get_conversation_path(conversation_id)
+        if not os.path.exists(path):
+            return None
+        with open(path, 'r') as f:
+            return json.load(f)
 
 
 def save_conversation(conversation: Dict[str, Any]):
@@ -71,11 +133,27 @@ def save_conversation(conversation: Dict[str, Any]):
     Args:
         conversation: Conversation dict to save
     """
-    ensure_data_dir()
-
-    path = get_conversation_path(conversation['id'])
-    with open(path, 'w') as f:
-        json.dump(conversation, f, indent=2)
+    if using_database():
+        ensure_db()
+        from psycopg.types.json import Json
+        with get_db_connection() as conn:
+            conn.execute(
+                """
+                UPDATE conversations
+                SET title = %s, messages = %s
+                WHERE id = %s
+                """,
+                (
+                    conversation["title"],
+                    Json(conversation["messages"]),
+                    conversation["id"],
+                ),
+            )
+    else:
+        ensure_data_dir()
+        path = get_conversation_path(conversation['id'])
+        with open(path, 'w') as f:
+            json.dump(conversation, f, indent=2)
 
 
 def list_conversations() -> List[Dict[str, Any]]:
@@ -85,26 +163,43 @@ def list_conversations() -> List[Dict[str, Any]]:
     Returns:
         List of conversation metadata dicts
     """
-    ensure_data_dir()
-
-    conversations = []
-    for filename in os.listdir(DATA_DIR):
-        if filename.endswith('.json'):
-            path = os.path.join(DATA_DIR, filename)
-            with open(path, 'r') as f:
-                data = json.load(f)
-                # Return metadata only
-                conversations.append({
-                    "id": data["id"],
-                    "created_at": data["created_at"],
-                    "title": data.get("title", "New Conversation"),
-                    "message_count": len(data["messages"])
-                })
-
-    # Sort by creation time, newest first
-    conversations.sort(key=lambda x: x["created_at"], reverse=True)
-
-    return conversations
+    if using_database():
+        ensure_db()
+        with get_db_connection() as conn:
+            cur = conn.execute(
+                """
+                SELECT id, created_at, title,
+                       jsonb_array_length(messages) AS message_count
+                FROM conversations
+                ORDER BY created_at DESC
+                """
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "id": row[0],
+                "created_at": row[1],
+                "title": row[2],
+                "message_count": row[3],
+            }
+            for row in rows
+        ]
+    else:
+        ensure_data_dir()
+        conversations = []
+        for filename in os.listdir(DATA_DIR):
+            if filename.endswith('.json'):
+                path = os.path.join(DATA_DIR, filename)
+                with open(path, 'r') as f:
+                    data = json.load(f)
+                    conversations.append({
+                        "id": data["id"],
+                        "created_at": data["created_at"],
+                        "title": data.get("title", "New Conversation"),
+                        "message_count": len(data["messages"])
+                    })
+        conversations.sort(key=lambda x: x["created_at"], reverse=True)
+        return conversations
 
 
 def add_user_message(conversation_id: str, content: str):
