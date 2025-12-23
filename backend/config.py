@@ -23,4 +23,4 @@ CHAIRMAN_MODEL = "google/gemini-3-pro-preview"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Data directory for conversation storage
-DATA_DIR = "data/conversations"
+DATA_DIR = os.getenv("DATA_DIR", "data/conversations")

@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: llm-council-backend
+    env: python
+    plan: free
+    buildCommand: python -m pip install uv && uv sync --frozen && cd frontend && npm install && npm run build
+    startCommand: uv run python -m backend.main
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: DATA_DIR
+        value: /data/conversations
+      - key: CORS_ORIGINS
+        value: https://YOUR-BACKEND.onrender.com
+    disk:
+      name: llm-council-data
+      mountPath: /data
+      sizeGB: 1

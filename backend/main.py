@@ -2,22 +2,35 @@
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Dict, Any
 import uuid
 import json
 import asyncio
+import os
+from pathlib import Path
 
 from . import storage
 from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
 
 app = FastAPI(title="LLM Council API")
 
-# Enable CORS for local development
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+def get_cors_origins() -> List[str]:
+    """Resolve allowed origins from env or default local dev hosts."""
+    env_value = os.getenv("CORS_ORIGINS")
+    if env_value:
+        return [origin.strip() for origin in env_value.split(",") if origin.strip()]
+    return ["http://localhost:5173", "http://localhost:3000"]
+
+
+# Enable CORS for local development (or configured origins)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -52,8 +65,11 @@ class Conversation(BaseModel):
 
 @app.get("/")
 async def root():
-    """Health check endpoint."""
-    return {"status": "ok", "service": "LLM Council API"}
+    """Serve the frontend if built, otherwise return a health check."""
+    index_path = FRONTEND_DIST / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    return JSONResponse({"status": "ok", "service": "LLM Council API"})
 
 
 @app.get("/api/conversations", response_model=List[ConversationMetadata])
@@ -192,6 +208,24 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             "Connection": "keep-alive",
         }
     )
+
+
+if FRONTEND_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str):
+    """Serve static files or fall back to the SPA entrypoint."""
+    if full_path.startswith("api"):
+        raise HTTPException(status_code=404, detail="Not found")
+    index_path = FRONTEND_DIST / "index.html"
+    if not index_path.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    file_path = FRONTEND_DIST / full_path
+    if file_path.exists() and file_path.is_file():
+        return FileResponse(file_path)
+    return FileResponse(index_path)
 
 
 if __name__ == "__main__":
